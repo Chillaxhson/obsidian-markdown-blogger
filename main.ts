@@ -40,6 +40,99 @@ export default class MarkdownBlogger extends Plugin {
 		sourcePath: string,
 		destinationPath: string
 	): Promise<string> {
+		// Process frontmatter
+		const frontmatterRegex = /^---\n([\s\S]*?)\n---/;
+		const frontmatterMatch = text.match(frontmatterRegex);
+
+		if (frontmatterMatch) {
+			const frontmatter = frontmatterMatch[1];
+			let processedFrontmatter = frontmatter;
+
+			// Process frontmatter image
+			const imageRegex = /image:\s*(\.\/.*?\.(?:png|jpg|jpeg|gif))/i;
+			processedFrontmatter = processedFrontmatter.replace(
+				imageRegex,
+				(match, imagePath) => {
+					try {
+						// Get the source markdown file's directory and the vault root path
+						const vaultRoot = (this.app.vault as any).adapter
+							.basePath;
+						const currentNoteDir = path.dirname(sourcePath);
+
+						// Extract image name from the path
+						const imageFileName = path.basename(imagePath);
+
+						// Look for the image in the attachments folder
+						const sourceImagePath = path.join(
+							vaultRoot,
+							currentNoteDir,
+							"attachments",
+							imageFileName
+						);
+
+						// Create a post-specific attachments/cover-image folder for the frontmatter image
+						const postFolder = path.dirname(destinationPath);
+						const attachmentsFolder = path.join(
+							postFolder,
+							"attachments"
+						);
+						const coverImageFolder = path.join(
+							attachmentsFolder,
+							"cover-image"
+						);
+
+						// Create the destination path for the image
+						const destImagePath = path.resolve(
+							coverImageFolder,
+							imageFileName
+						);
+
+						// Copy the image file if it exists
+						if (fs.existsSync(sourceImagePath)) {
+							if (!fs.existsSync(coverImageFolder)) {
+								fs.mkdirSync(coverImageFolder, {
+									recursive: true,
+								});
+							}
+							fs.copyFileSync(sourceImagePath, destImagePath);
+							return `image: ./attachments/cover-image/${imageFileName}`;
+						}
+					} catch (error) {
+						console.error(
+							"Error processing frontmatter image:",
+							error
+						);
+					}
+					return match;
+				}
+			);
+
+			// Process tags format
+			const tagsRegex = /tags:\n((?:[ ]{2}- .*\n)*)/;
+			processedFrontmatter = processedFrontmatter.replace(
+				tagsRegex,
+				(match, tagsList: string) => {
+					const tags = tagsList
+						.split("\n")
+						.filter((line: string) => line.trim().startsWith("- "))
+						.map((line: string) => {
+							const tag = line.trim().substring(2).trim();
+							// Remove # prefix if it exists and wrap in quotes
+							return `"${
+								tag.startsWith("#") ? tag.substring(1) : tag
+							}"`;
+						})
+						.filter((tag: string) => tag);
+
+					return `tags: [${tags.join(", ")}]\n`; // Add newline after the array
+				}
+			);
+
+			// Replace the original frontmatter with processed one
+			text = text.replace(frontmatterMatch[1], processedFrontmatter);
+		}
+
+		// Process inline images
 		const obsidianImageRegex = /!\[\[(.*?)\]\]/g;
 		const processedText = text.replace(
 			obsidianImageRegex,
@@ -89,6 +182,7 @@ export default class MarkdownBlogger extends Plugin {
 						// Return the image reference using relative path to attachments folder
 						return `![${imageFileName}](./attachments/${imageFileName})`;
 					} else {
+						console.log("Image not found at:", sourceImagePath);
 						new Notice(`Image not found: ${sourceImagePath}`);
 						return match; // Keep original syntax if image not found
 					}
